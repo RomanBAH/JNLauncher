@@ -11,8 +11,8 @@ using System.Windows;
 [assembly: AssemblyDescription("JNight Launcher")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("JNight")]
-[assembly: AssemblyProduct("JNLauncherC")]
-[assembly: AssemblyCopyright("Copyright ©  2025")]
+[assembly: AssemblyProduct("JNLauncher")]
+[assembly: AssemblyCopyright("JNight©  2025")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 

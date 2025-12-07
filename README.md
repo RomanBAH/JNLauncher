@@ -1,1 +1,1 @@
-# JNLauncherC
+# JNLauncher

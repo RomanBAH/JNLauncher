@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -20,8 +21,10 @@ namespace JNightLauncher
     public partial class MainWindow : Window
     {
         private const string CONFIG_FILE = "jnconfig.json";
-        private const string VERSION = "0.0.1";
         private LauncherConfig cfg;
+
+        // Получаем версию исполняемой сборки
+        private readonly string VERSION = FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion;
 
         // Логирование
         private void Log(string message)
