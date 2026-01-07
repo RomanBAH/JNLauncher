@@ -54,7 +54,7 @@
     <ApplicationIcon>favicon.ico</ApplicationIcon>
   </PropertyGroup>
   <PropertyGroup>
-    <SignManifests>true</SignManifests>
+    <SignManifests>false</SignManifests>
   </PropertyGroup>
   <PropertyGroup>
     <ManifestCertificateThumbprint>DB6D31E2D2FAE9D12853503161BE87C4FE5A391C</ManifestCertificateThumbprint>
@@ -63,7 +63,7 @@
     <ManifestKeyFile>JNLauncherC_TemporaryKey.pfx</ManifestKeyFile>
   </PropertyGroup>
   <PropertyGroup>
-    <SignAssembly>true</SignAssembly>
+    <SignAssembly>false</SignAssembly>
   </PropertyGroup>
   <PropertyGroup>
     <AssemblyOriginatorKeyFile>JNLauncherC_TemporaryKey.pfx</AssemblyOriginatorKeyFile>

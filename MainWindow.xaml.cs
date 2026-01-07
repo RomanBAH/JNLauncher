@@ -13,8 +13,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Navigation;
-using System.Xml;
-
+using System.Windows.Threading;
 
 namespace JNightLauncher
 {
@@ -22,16 +21,16 @@ namespace JNightLauncher
     {
         private const string CONFIG_FILE = "jnconfig.json";
         private LauncherConfig cfg;
-
         // Получаем версию исполняемой сборки
         private readonly string VERSION = FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion;
+        private DispatcherTimer updateTimer;
 
         // Логирование
         private void Log(string message)
         {
             try
             {
-                string path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.log");
+                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.log");
                 // Отключим логирование если за это нас блочит антивирь
                 //File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
             }
@@ -49,7 +48,6 @@ namespace JNightLauncher
         {
             WindowState = WindowState.Minimized;
         }
-
 
         // Перетаскивание за кастомный заголовок
         private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -81,10 +79,20 @@ namespace JNightLauncher
         {
             InitializeComponent();
             LoadConfig();
+            // Задержка 5 секунд перед обновлением серверов с сайта
+            Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(UpdateServersFromSite));
             BuildGUI();
             LoadHtmlContent();
+            // Настройка таймера для периодического обновления онлайна (каждые 30 сек)
+            updateTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(30)
+            };
+            updateTimer.Tick += (s, e) => UpdatePlayerCounts();
+            updateTimer.Start();
+            // Первое обновление онлайна сразу после запуска
+            UpdatePlayerCounts();
         }
-
 
         #region CONFIG
         // Чтение конфига
@@ -114,20 +122,47 @@ namespace JNightLauncher
         // Запись конфига
         private void SaveConfig()
         {
-            File.WriteAllText(CONFIG_FILE, JsonConvert.SerializeObject(cfg, Newtonsoft.Json.Formatting.Indented));
+            File.WriteAllText(CONFIG_FILE, JsonConvert.SerializeObject(cfg, Formatting.Indented));
+        }
+
+        // Обновление блока Servers из удалённого JSON
+        private void UpdateServersFromSite()
+        {
+            try
+            {
+                using (var client = new WebClient())
+                {
+                    string json = client.DownloadString("https://jnight.ru/launcher/config_default.json");
+                    var remoteConfig = JsonConvert.DeserializeObject<LauncherConfig>(json);
+                    if (remoteConfig?.Servers != null && remoteConfig.Servers.Count > 0)
+                    {
+                        cfg.Servers = remoteConfig.Servers;
+                        SaveConfig();
+                        Log("Servers updated from site successfully.");
+                        // Перестроить GUI после обновления
+                        Dispatcher.Invoke(BuildGUI);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Error updating servers from site: " + ex.Message);
+            }
         }
         #endregion
 
-        
         #region GUI
         // Собираем конпки
         private void BuildGUI()
         {
-            // Ник
             NameBox.TextChanged += (s, e) => cfg.Name = NameBox.Text;
 
-            // Кнопки серверов
             ServersPanel.Children.Clear();
+
+            const double buttonEffectiveHeight = 55; // Height=40 + Margin Top/Bottom=10
+            const double baseHeight = 220;           // Заголовок + логотип + поля + отступы (подобрано под ~6 серверов)
+            const double minHeight = 560;            // Не меньше оригинала
+
             foreach (var srv in cfg.Servers)
             {
                 var btn = new Button
@@ -140,16 +175,27 @@ namespace JNightLauncher
                     BorderBrush = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFrom("#191B1E"),
                     BorderThickness = new Thickness(2),
                     Height = 40,
-                    Padding = new Thickness(4, 5, 4, 5)
+                    Padding = new Thickness(4, 5, 4, 5),
+                    Name = "Btn_" + (srv.Code?.ToLower() ?? Guid.NewGuid().ToString("N").Substring(0, 8))
                 };
 
-                // Эффект нажатия
                 btn.PreviewMouseLeftButtonDown += (s, e) => btn.Background = System.Windows.Media.Brushes.Gray;
                 btn.PreviewMouseLeftButtonUp += (s, e) => btn.Background = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFrom("#3E444C");
 
                 btn.Click += (s, e) => RunLauncher(srv);
                 ServersPanel.Children.Add(btn);
             }
+
+            // === Динамическая высота окна ===
+            int serversCount = cfg.Servers.Count;
+            double calculatedHeight = baseHeight + serversCount * buttonEffectiveHeight;
+
+            if (calculatedHeight < minHeight)
+                calculatedHeight = minHeight;
+
+            this.Height = calculatedHeight;
+            UpdatePlayerCounts();
+            Log($"Window height adjusted to {calculatedHeight} px for {serversCount} servers.");
         }
 
         // подгрузка html контента
@@ -159,11 +205,9 @@ namespace JNightLauncher
             {
                 using (var client = new WebClient())
                 {
-                    byte[] data = client.DownloadData("https://jnight.ru/news_feed.php?v=" + VERSION);
-
+                    byte[] data = client.DownloadData("https://jnight.ru/launcher/news_feed.php?v=" + VERSION);
                     // Декодируем правильно, без автоопределения
                     string html = System.Text.Encoding.UTF8.GetString(data);
-
                     RightBrowser.NavigateToString(html);
                 }
             }
@@ -172,7 +216,49 @@ namespace JNightLauncher
                 RightBrowser.NavigateToString("<p>Ошибка загрузки новостей</p>");
             }
         }
+        #endregion
 
+        #region PLAYER COUNTS
+        // Обновление количества игроков на кнопках
+        private void UpdatePlayerCounts()
+        {
+            try
+            {
+                using (var client = new WebClient())
+                {
+                    client.Encoding = System.Text.Encoding.UTF8;
+                    string json = client.DownloadString("https://jnight.ru/ajax/getplayerscount.php");
+                    var counts = JsonConvert.DeserializeObject<Dictionary<string, object>>(json);
+
+                    foreach (Button btn in ServersPanel.Children.OfType<Button>())
+                    {
+                        // Берём текущее содержимое (может быть уже с (число) или чистое)
+                        string currentText = btn.Content.ToString();
+                        string baseName = currentText.Contains("(") ? currentText.Substring(0, currentText.LastIndexOf(" (")).Trim() : currentText;
+
+                        // Ищем сервер с точно таким же Name
+                        var srv = cfg.Servers.FirstOrDefault(s => s.Name == baseName);
+                        if (srv != null && !string.IsNullOrEmpty(srv.Code))
+                        {
+                            string codeLower = srv.Code.ToLower();
+                            if (counts.TryGetValue(codeLower, out var countObj) && int.TryParse(countObj.ToString(), out int count))
+                            {
+                                btn.Content = $"{srv.Name} ({count})";
+                            }
+                            else
+                            {
+                                btn.Content = srv.Name; // если нет данных — убираем старое число
+                            }
+                        }
+                    }
+                    Log("Player counts updated successfully.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Error updating player counts: " + ex.Message + " | " + ex.StackTrace);
+            }
+        }
         #endregion
 
         #region LAUNCHER LOGIC
@@ -219,7 +305,6 @@ namespace JNightLauncher
             try
             {
                 string dir = Path.GetDirectoryName(exe);
-
                 // Лог
                 Log("============ StartDayZ ============");
                 Log("Exe: " + exe);
@@ -232,11 +317,7 @@ namespace JNightLauncher
 
                 if (mods != null && mods.Count > 0)
                 {
-                    // Моды в кавычках, как требует DayZ
-                    // -mod="mod1;mod2;..."
-                    string modList = string.Join(";", mods.Select(m =>
-                        Path.Combine(dir, "!Workshop", m)));
-
+                    string modList = string.Join(";", mods.Select(m => Path.Combine(dir, "!Workshop", m)));
                     args += $" \"-mod={modList}\"";
                     Log("Mods: " + modList);
                 }
@@ -259,7 +340,6 @@ namespace JNightLauncher
 
                 // Старт
                 Process.Start(psi);
-
                 Log("Process started successfully!");
             }
             catch (Exception ex)
@@ -314,7 +394,6 @@ namespace JNightLauncher
             {
                 // Запуск DayZ
                 StartDayZ(dayzPath, cfg.Name, server.Ip, server.Port, server.Mods);
-
                 // Ждем n секунд, чтобы не спамили кнопки
                 await Task.Delay(10000);
             }
@@ -325,13 +404,11 @@ namespace JNightLauncher
                     btn.IsEnabled = true;
             }
         }
-
         #endregion
 
-        // Здесь вставляем обработчик клика по ссылке в логотипе
-        private void WebsiteLink_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void WebsiteLink_Click(object sender, MouseButtonEventArgs e)
         {
-            System.Diagnostics.Process.Start(new ProcessStartInfo
+            Process.Start(new ProcessStartInfo
             {
                 FileName = "https://jnight.ru",
                 UseShellExecute = true
@@ -353,7 +430,6 @@ namespace JNightLauncher
                 tb.SelectionStart = selStart > 0 ? selStart - 1 : 0; // корректируем позицию курсора
             }
         }
-
     }
 
     #region CONFIG CLASSES
@@ -364,18 +440,34 @@ namespace JNightLauncher
 
         public static LauncherConfig Default()
         {
-            return new LauncherConfig
+            var config = new LauncherConfig { Name = "JNSurvivour" };
+
+            try
             {
-                Name = "JNSurvivour",
-                Servers = new List<Server>
+                using (var client = new WebClient())
                 {
-                    new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Chernorussia", Ip="91.122.15.163", Port="2502", Mods=new List<string>() },
-                    new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Livonia", Ip="91.122.15.163", Port="2402", Mods=new List<string>() },
-                    new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Sakhal", Ip="91.122.15.163", Port="2102", Mods=new List<string>() },
-                    new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Namalsk", Ip="91.122.15.163", Port="2302", Mods=new List<string>{"@Namalsk Survival","@Namalsk Island"} },
-                    new Server { Name="JNight.ru Vanilla|PVE|NO KOS|DeerIsle", Ip="91.122.15.163", Port="2202", Mods=new List<string>{"@CF","@DeerIsle","@Disable_DeerIsle_ClassicWalk"} },
+                    string json = client.DownloadString("https://jnight.ru/launcher/config_default.json");
+                    var remoteConfig = JsonConvert.DeserializeObject<LauncherConfig>(json);
+                    if (remoteConfig?.Servers != null && remoteConfig.Servers.Count > 0)
+                    {
+                        config.Servers = remoteConfig.Servers;
+                        return config;
+                    }
                 }
+            }
+            catch { }
+
+            // Fallback на hardcoded с добавлением Code
+            config.Servers = new List<Server>
+            {
+                new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Chernorussia", Ip="91.122.15.163", Port="2502", Mods=new List<string>(), Code="cherno" },
+                new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Livonia", Ip="91.122.15.163", Port="2402", Mods=new List<string>(), Code="enoch" },  
+                new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Sakhal", Ip="91.122.15.163", Port="2102", Mods=new List<string>(), Code="sakhal" },
+                new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Namalsk", Ip="91.122.15.163", Port="2302", Mods=new List<string>{"@Namalsk Survival","@Namalsk Island"}, Code="namalsk" },
+                new Server { Name="JNight.ru Vanilla|PVE|NO KOS|DeerIsle", Ip="91.122.15.163", Port="2202", Mods=new List<string>{"@CF","@DeerIsle","@Disable_DeerIsle_ClassicWalk"}, Code="deerisle" },
+                new Server { Name="JNight.ru Vanilla|PVE|NO KOS|Banov", Ip="91.122.15.163", Port="2101", Mods=new List<string>{"@Banov"}, Code="banov" }  
             };
+            return config;
         }
     }
 
@@ -385,10 +477,7 @@ namespace JNightLauncher
         public string Ip { get; set; }
         public string Port { get; set; }
         public List<string> Mods { get; set; }
+        public string Code { get; set; }  
     }
     #endregion
-
-
-
-
 }

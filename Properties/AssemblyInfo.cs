@@ -48,5 +48,5 @@ using System.Windows;
 //      Номер сборки
 //      Номер редакции
 //
-[assembly: AssemblyVersion("0.0.2.1")]
-[assembly: AssemblyFileVersion("0.0.2.1")]
+[assembly: AssemblyVersion("0.0.3.2")]
+[assembly: AssemblyFileVersion("0.0.3.2")]
